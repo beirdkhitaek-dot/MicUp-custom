@@ -42,6 +42,17 @@ android {
         }
     }
 
+    // A fixed debug key (the public, standard "android" debug credentials) so that every CI build
+    // is signed the same way and a new APK installs over the previous one without uninstalling.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
