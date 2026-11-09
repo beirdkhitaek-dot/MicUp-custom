@@ -22,6 +22,26 @@ No PC required. No monthly subscription.
 
 ---
 
+## This fork: build on GitHub and custom plugins
+
+**Get an APK without a PC.** Push to `main` or `ci-and-custom-plugins`, or open the **Actions** tab, choose **Build APK and plugin** and press **Run workflow**. When the run finishes, download `MicUp-debug-apk` from the run's **Artifacts** list, unzip it and install the `.apk`. No secrets are needed. Builds use the fixed debug key in `app/debug.keystore`, so a new build installs over the previous one. (On a fork, GitHub asks you to enable Actions once on the Actions tab.)
+
+**Custom plugins.** MicUp runs native CLAP, LV2 and VST3 `.so` plugins inside its real-time audio engine. A ready-made example lives in [`plugins/null-commander`](plugins/null-commander): a deep, muffled, distorted voice chain (pitch, bass, distortion, bit crush, muffle, stutter) as a single C++ file. The same workflow builds it for `arm64-v8a`, `armeabi-v7a` and `x86_64` as `NullCommander-<abi>` artifacts. To use it:
+
+1. Download `NullCommander-arm64-v8a` (most phones) and unzip `NullCommander.clap`.
+2. Open it from your file manager and choose **MicUp**, or add its folder under **Settings, Manage Plugin Paths**.
+3. In the plugin browser add **Null Commander FX**, and turn the built-in pitch shifter off because the plugin has its own.
+
+To write your own plugin, copy `plugins/null-commander`, change the descriptor id and name, `kParams` and `tick()`. Plugins must be mono-capable and fast: the host bypasses any plugin that takes more than 2 ms per audio block.
+
+Plugin APKs (the AIDL interface in `app/src/main/aidl`) are listed in the plugin browser but are not run by the audio engine, because calling another app from the real-time audio thread would add delay and dropouts. Use a native plugin instead.
+
+`tests/clap-host/run.sh` builds the plugin and the real `ClapHost.cpp` on a PC and runs audio through them. CI runs it on every push.
+
+The **Null Commander (basic)** preset gets a similar deep, muffled sound from the built-in effects alone. It is an estimate, so adjust it by ear.
+
+---
+
 ## Features
 
 -  **Built-in DSP chain** — Noise Gate, 10-band EQ, Compressor, Reverb, Pitch Shifter

@@ -39,60 +39,113 @@ static const clap_host_t kClapHost = {
 // ─── CLAP plugin instance ────────────────────────────────────────────────────
 struct ClapPluginInstance : public PluginInstance {
     void*              dlib       = nullptr;
+    const clap_plugin_entry_t* entry = nullptr;
     const clap_plugin_t* plugin  = nullptr;
     const clap_plugin_params_t* paramsExt = nullptr;
 
-    // Pre-allocated CLAP process structure
+    // Separate input and output buffers: plugins are not required to support in-place processing.
+    std::vector<float>  processBuffer;
+    std::vector<float>  outBuffer;
+    float*              inPtrs[1]  = {nullptr};
+    float*              outPtrs[1] = {nullptr};
     clap_audio_buffer_t inBuf{}, outBuf{};
     clap_process_t      proc{};
-    float* channelPtrs[1] = {nullptr};
-    std::vector<float>  processBuffer;
+
+    // Parameter changes: the UI thread pushes, the audio thread drains once per process() call.
+    // Single producer (setParam runs under PluginHost's UI mutex), single consumer.
+    static constexpr uint32_t kMaxEvents = 64;
+    clap_event_param_value_t queue[kMaxEvents];
+    std::atomic<uint32_t>    qHead{0}, qTail{0};
+    clap_event_param_value_t block[kMaxEvents];   // events handed to the plugin for this block
+    uint32_t                 blockCount = 0;
+    clap_input_events_t      inEvents{};
+    clap_output_events_t     outEvents{};
+
+    void initEventLists() {
+        inEvents.ctx  = this;
+        inEvents.size = [](const clap_input_events_t* l) -> uint32_t {
+            return static_cast<ClapPluginInstance*>(l->ctx)->blockCount;
+        };
+        inEvents.get = [](const clap_input_events_t* l, uint32_t i) -> const clap_event_header_t* {
+            auto* self = static_cast<ClapPluginInstance*>(l->ctx);
+            return i < self->blockCount ? &self->block[i].header : nullptr;
+        };
+        outEvents.ctx      = this;
+        outEvents.try_push = [](const clap_output_events_t*, const clap_event_header_t*) -> bool {
+            return true;  // plugin output events (e.g. parameter gestures) are ignored
+        };
+    }
+
+    void drainQueue() {
+        uint32_t t = qTail.load(std::memory_order_relaxed);
+        const uint32_t h = qHead.load(std::memory_order_acquire);
+        uint32_t n = 0;
+        while (t != h && n < kMaxEvents) { block[n++] = queue[t % kMaxEvents]; ++t; }
+        qTail.store(t, std::memory_order_release);
+        blockCount = n;
+    }
 
     bool process(float* buf, int32_t frames, int32_t sr) override {
         if (!plugin || !plugin->process) return false;
         if ((int32_t)processBuffer.size() < frames) return false;
 
         std::memcpy(processBuffer.data(), buf, frames * sizeof(float));
-        channelPtrs[0]   = processBuffer.data();
-        inBuf.data32     = channelPtrs;
+        inPtrs[0]  = processBuffer.data();
+        outPtrs[0] = outBuffer.data();
+        inBuf.data32        = inPtrs;
         inBuf.channel_count = 1;
-        outBuf.data32    = channelPtrs;
+        outBuf.data32       = outPtrs;
         outBuf.channel_count = 1;
 
-        proc.frames_count       = (uint32_t)frames;
-        proc.audio_inputs       = &inBuf;
+        drainQueue();
+
+        proc.steady_time         = -1;
+        proc.frames_count        = (uint32_t)frames;
+        proc.transport           = nullptr;
+        proc.audio_inputs        = &inBuf;
         proc.audio_inputs_count  = 1;
-        proc.audio_outputs      = &outBuf;
+        proc.audio_outputs       = &outBuf;
         proc.audio_outputs_count = 1;
-        proc.in_events  = nullptr;
-        proc.out_events = nullptr;
+        proc.in_events           = &inEvents;
+        proc.out_events          = &outEvents;
 
         clap_process_status status = plugin->process(plugin, &proc);
         if (status == CLAP_PROCESS_ERROR) return false;
 
-        std::memcpy(buf, processBuffer.data(), frames * sizeof(float));
+        std::memcpy(buf, outBuffer.data(), frames * sizeof(float));
         return true;
     }
 
     void setParam(int32_t id, float value) override {
-        // CLAP params are flushed via events; store for next callback
-        // For simplicity use direct automation if ext available
-        if (paramsExt) {
-            clap_event_param_value_t ev{};
-            ev.header.size  = sizeof(ev);
-            ev.header.type  = CLAP_EVENT_PARAM_VALUE;
-            ev.header.flags = CLAP_EVENT_IS_LIVE;
-            ev.param_id     = (clap_id)id;
-            ev.value        = (double)value;
-        }
+        if (!paramsExt) return;
+        const uint32_t h = qHead.load(std::memory_order_relaxed);
+        const uint32_t t = qTail.load(std::memory_order_acquire);
+        if (h - t >= kMaxEvents) return;  // queue full: drop this change (the UI sends the next one soon)
+        clap_event_param_value_t ev{};
+        ev.header.size     = sizeof(ev);
+        ev.header.time     = 0;
+        ev.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+        ev.header.type     = CLAP_EVENT_PARAM_VALUE;
+        ev.header.flags    = CLAP_EVENT_IS_LIVE;
+        ev.param_id        = (clap_id)id;
+        ev.cookie          = nullptr;
+        ev.note_id         = -1;
+        ev.port_index      = -1;
+        ev.channel         = -1;
+        ev.key             = -1;
+        ev.value           = (double)value;
+        queue[h % kMaxEvents] = ev;
+        qHead.store(h + 1, std::memory_order_release);
     }
 
     void cleanup() override {
         if (plugin) {
+            plugin->stop_processing(plugin);
             plugin->deactivate(plugin);
             plugin->destroy(plugin);
             plugin = nullptr;
         }
+        if (entry) { entry->deinit(); entry = nullptr; }
         if (dlib) { dlclose(dlib); dlib = nullptr; }
     }
 };
@@ -154,16 +207,30 @@ std::shared_ptr<PluginInstance> ClapHost::load(const char* path, int32_t sampleR
 
     auto instance         = std::make_shared<ClapPluginInstance>();
     instance->dlib        = dlib;
+    instance->entry       = entry;
     instance->plugin      = plugin;
     instance->format      = PluginFormat::CLAP;
     instance->paramsExt   = reinterpret_cast<const clap_plugin_params_t*>(
         plugin->get_extension(plugin, CLAP_EXT_PARAMS));
-    instance->processBuffer.resize(4096, 0.0f);
+    instance->processBuffer.assign(4096, 0.0f);
+    instance->outBuffer.assign(4096, 0.0f);
+    instance->initEventLists();
     return instance;
 }
 
 // ─── Query params from a loaded CLAP instance ───────────────────────────────
 // Returns JSON: [{"id":0,"name":"Gain","min":0.0,"max":1.0,"default":0.5}, ...]
+static std::string jsonEscape(const char* s) {
+    std::string out;
+    for (; *s; ++s) {
+        const unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') { out += '\\'; out += (char)c; }
+        else if (c < 0x20)         { out += ' '; }
+        else                       { out += (char)c; }
+    }
+    return out;
+}
+
 std::string ClapHost::getParams(const std::shared_ptr<PluginInstance>& inst) {
     auto* ci = static_cast<ClapPluginInstance*>(inst.get());
     if (!ci || !ci->paramsExt) return "[]";
@@ -172,6 +239,7 @@ std::string ClapHost::getParams(const std::shared_ptr<PluginInstance>& inst) {
     if (count == 0) return "[]";
 
     std::string json = "[";
+    bool first = true;
     for (uint32_t i = 0; i < count; i++) {
         clap_param_info_t info{};
         if (!ci->paramsExt->get_info(ci->plugin, i, &info)) continue;
@@ -179,12 +247,11 @@ std::string ClapHost::getParams(const std::shared_ptr<PluginInstance>& inst) {
         double val = 0.0;
         ci->paramsExt->get_value(ci->plugin, info.id, &val);
 
-        if (i > 0) json += ",";
+        if (!first) json += ",";
+        first = false;
         json += "{";
         json += "\"id\":" + std::to_string(info.id) + ",";
-        // Escape name
-        std::string name(info.name);
-        json += "\"name\":\"" + name + "\",";
+        json += "\"name\":\"" + jsonEscape(info.name) + "\",";
         json += "\"min\":"     + std::to_string(info.min_value) + ",";
         json += "\"max\":"     + std::to_string(info.max_value) + ",";
         json += "\"default\":" + std::to_string(val);

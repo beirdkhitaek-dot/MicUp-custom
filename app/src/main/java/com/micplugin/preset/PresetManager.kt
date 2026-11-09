@@ -90,6 +90,25 @@ class PresetManager @Inject constructor(
                 ),
             ),
             Preset(
+                // Deep and muffled using only the built-in effects (no plugin needed).
+                // For distortion, bit crush and stutter, also load the Null Commander FX plugin
+                // from plugins/null-commander and turn the built-in pitch shifter off (the plugin has its own).
+                // These values are an estimate, not any creator's real settings: adjust by ear.
+                name = "Null Commander (basic)",
+                isBuiltIn = true,
+                effects = EffectState(
+                    gateThreshold  = -50f,
+                    eqBands        = listOf(8f, 8f, 6f, 3f, 0f, -4f, -9f, -13f, -15f, -15f),
+                    compEnabled    = true,
+                    compThreshold  = -20f,
+                    compRatio      = 4f,
+                    reverbEnabled  = true,
+                    reverbMix      = 0.12f,
+                    pitchEnabled   = true,
+                    pitchSemitones = -5f,
+                ),
+            ),
+            Preset(
                 name = "Telephone Effect",
                 isBuiltIn = true,
                 effects = EffectState(
