@@ -42,6 +42,8 @@ jobs:
           cache: gradle
 
       - uses: android-actions/setup-android@v3
+        with:
+          packages: ''   # the default installs a legacy "tools" package that no longer exists
 
       - name: Install NDK and CMake
         run: |
