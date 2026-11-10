@@ -74,7 +74,10 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
         val snapshot = try { appStateSnapshot() } catch (e: Throwable) { "(could not read app state: $e)" }
         scope.launch {
             val text = try {
-                withContext(Dispatchers.IO) { DiagnosticsLog.build(context, snapshot) }
+                withContext(Dispatchers.IO) {
+                    val probe = try { vm.shizukuProbe() } catch (e: Throwable) { "probe failed: $e" }
+                    DiagnosticsLog.build(context, snapshot + "\n=== Shizuku probe (runs as the shell user) ===\n" + probe)
+                }
             } catch (e: Throwable) {
                 "Could not collect the log: $e"
             }

@@ -275,6 +275,7 @@ class AudioViewModel @Inject constructor(
     fun rescan() { viewModelScope.launch { pluginManager.scanAll() } }
 
     fun requestShizukuPermission() { shizukuManager.requestPermission() }
+    fun shizukuProbe(): String = shizukuManager.probe()
 
     /** Returns null if available, or a reason string if not. */
     fun checkTierAvailability(tier: com.micplugin.service.VirtualMicTier): String? =

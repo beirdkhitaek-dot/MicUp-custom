@@ -5,3 +5,5 @@ app/.cxx/
 local.properties
 *.iml
 .idea/
+
+app/src/main/assets/plugins/

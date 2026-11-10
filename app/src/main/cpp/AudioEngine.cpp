@@ -248,6 +248,14 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         pluginHost_->process(out, numFrames, sampleRate_);
     }
 
+    // Safety: a broken filter or plugin must never reach the speaker or the virtual mic.
+    // NaN/Inf/huge values become silence, everything else is held inside +-0.98.
+    for (int32_t i = 0; i < numFrames; ++i) {
+        float v = out[i];
+        if (!(v > -1000.0f && v < 1000.0f)) v = 0.0f;   // also catches NaN
+        out[i] = v > 0.98f ? 0.98f : (v < -0.98f ? -0.98f : v);
+    }
+
     // Measure output level
     measureLevel(out, numFrames, params_.outputLevelDb);
 

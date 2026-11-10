@@ -115,16 +115,62 @@ class ShizukuManager @Inject constructor() {
         return null
     }
 
+    /**
+     * Runs a command in the Shizuku (adb "shell") process, not in this app. Shizuku hides
+     * newProcess() since v13, so it is called by reflection; if that fails we fall back to a
+     * normal in-app process and say so in the log, because results then are NOT shell results.
+     */
     private fun execInternal(cmd: String): String? {
+        val viaShizuku = try {
+            val m = Shizuku::class.java.getDeclaredMethod(
+                "newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java
+            ).apply { isAccessible = true }
+            val p = m.invoke(null, arrayOf("sh", "-c", "$cmd 2>&1"), null, null) as Process
+            val out = p.inputStream.bufferedReader().readText()
+            p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+            Log.d(TAG, "shizuku-exec[$cmd] => ${out.take(120)}")
+            out
+        } catch (e: Throwable) {
+            Log.e(TAG, "Shizuku newProcess failed, running as the app instead: $e")
+            null
+        }
+        if (viaShizuku != null) return viaShizuku
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
             val out = process.inputStream.bufferedReader().readText()
             process.waitFor()
-            Log.d(TAG, "exec[$cmd] => ${out.take(120)}")
+            Log.d(TAG, "app-exec[$cmd] => ${out.take(120)}")
             out
         } catch (e: Exception) {
             Log.e(TAG, "exec failed: $e")
             null
+        }
+    }
+
+    /**
+     * Facts for the diagnostic log, gathered as the Shizuku shell user (blocking; call from a
+     * background thread). Tells us whether commands really run as shell, whether the kernel can
+     * do ALSA loopback, and whether the shell may use Android's audio routing policy.
+     */
+    fun probe(): String {
+        if (_state.value != ShizukuState.READY) return "Shizuku not ready (${_state.value}) - no probe"
+        val checks = listOf(
+            "who am I"            to "id",
+            "SELinux context"     to "cat /proc/self/attr/current",
+            "Android/kernel"      to "getprop ro.build.version.release; cat /proc/version",
+            "ALSA cards"          to "cat /proc/asound/cards",
+            "ALSA loopback config" to "(zcat /proc/config.gz | grep -i -E 'SND_ALOOP|SND_DUMMY|SND_USB_AUDIO') 2>&1 | head -5",
+            "aloop module files"  to "ls /vendor/lib/modules /vendor_dlkm/lib/modules /system/lib/modules 2>&1 | grep -i -E 'aloop|snd' | head -10",
+            "loaded modules"      to "grep -i -E 'snd|aloop' /proc/modules | head -10",
+            "can load modules?"   to "grep CapEff /proc/self/status",
+            "audio routing perm"  to "dumpsys package com.android.shell | grep -i -E 'MODIFY_AUDIO_ROUTING|CAPTURE_AUDIO_OUTPUT|CAPTURE_AUDIO_HOTWORD' | head -5",
+            "audio policy mixes"  to "dumpsys media.audio_policy | grep -i -E 'dynamic|mix' | head -8",
+        )
+        return buildString {
+            for ((label, cmd) in checks) {
+                val r = (try { execInternal(cmd) } catch (e: Throwable) { "error: $e" } ?: "no output").trim()
+                appendLine("$label: ${r.ifEmpty { "(empty)" }.replace("\n", " | ")}")
+            }
         }
     }
 
