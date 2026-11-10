@@ -259,6 +259,28 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
                 SettingsActionRow("Rescan Plugin Directories", Icons.Default.Refresh) { vm.rescan() }
             }
 
+            // ── Experimental: send the processed voice to Discord ─────────────
+            SettingsSection("Send voice to Discord (experimental)") {
+                val injStatus by com.micplugin.service.MicInjector.status.collectAsState()
+                var injOn by remember { mutableStateOf(com.micplugin.service.MicInjector.isActive) }
+                Text(
+                    "Uses Shizuku to redirect the microphone of the chosen app to MicUp's processed voice. " +
+                        "Start the engine first, then switch this on, then join the call.",
+                    color = StudioColors.TextMuted, style = MaterialTheme.typography.bodySmall,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Send to Discord", color = StudioColors.TextPrimary, modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = injOn || injStatus.startsWith("Active"),
+                        onCheckedChange = { on ->
+                            injOn = on
+                            if (on) vm.startInjector(context, "com.discord") else vm.stopInjector()
+                        },
+                    )
+                }
+                SettingsInfoRow("Status", injStatus)
+            }
+
             // ── Diagnostics ───────────────────────────────────────────────────
             SettingsSection("Diagnostics") {
                 Text(

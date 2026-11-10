@@ -139,7 +139,10 @@ class AudioProcessingService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        audioEngine.setMonitorCallback { buf: FloatArray, size: Int -> SoftwareLoopback.writeProcessed(buf, size) }
+        audioEngine.setMonitorCallback { buf: FloatArray, size: Int ->
+            SoftwareLoopback.writeProcessed(buf, size)
+            MicInjector.offer(buf, size)
+        }
         audioEngine.start()
         startStatusUpdates()
         if (!SoftwareLoopback.isRunning) SoftwareLoopback.start(this)

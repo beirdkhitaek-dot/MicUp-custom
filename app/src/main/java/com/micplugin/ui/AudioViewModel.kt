@@ -276,6 +276,8 @@ class AudioViewModel @Inject constructor(
 
     fun requestShizukuPermission() { shizukuManager.requestPermission() }
     fun shizukuProbe(): String = shizukuManager.probe()
+    fun startInjector(context: android.content.Context, pkg: String) = com.micplugin.service.MicInjector.start(context, shizukuManager, pkg)
+    fun stopInjector() = com.micplugin.service.MicInjector.stop()
 
     /** Returns null if available, or a reason string if not. */
     fun checkTierAvailability(tier: com.micplugin.service.VirtualMicTier): String? =

@@ -127,7 +127,7 @@ class ShizukuManager @Inject constructor() {
             ).apply { isAccessible = true }
             val p = m.invoke(null, arrayOf("sh", "-c", "$cmd 2>&1"), null, null) as Process
             val out = p.inputStream.bufferedReader().readText()
-            p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+            try { p.waitFor() } catch (_: Throwable) { /* output is already complete */ }
             Log.d(TAG, "shizuku-exec[$cmd] => ${out.take(120)}")
             out
         } catch (e: Throwable) {
@@ -144,6 +144,19 @@ class ShizukuManager @Inject constructor() {
         } catch (e: Exception) {
             Log.e(TAG, "exec failed: $e")
             null
+        }
+    }
+
+    /** Starts a long-running command in the Shizuku shell and returns it (null if Shizuku is not ready). */
+    fun spawn(cmd: String): Process? {
+        if (_state.value != ShizukuState.READY) return null
+        return try {
+            val m = Shizuku::class.java.getDeclaredMethod(
+                "newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java
+            ).apply { isAccessible = true }
+            m.invoke(null, arrayOf("sh", "-c", "$cmd 2>&1"), null, null) as Process
+        } catch (e: Throwable) {
+            Log.e(TAG, "spawn failed: $e"); null
         }
     }
 
