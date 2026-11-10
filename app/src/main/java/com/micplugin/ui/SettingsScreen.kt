@@ -18,9 +18,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import android.widget.Toast
 import com.micplugin.CrashReporter
+import com.micplugin.DiagnosticsLog
 import com.micplugin.service.ShizukuState
 import com.micplugin.service.VirtualMicTier
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewModel()) {
@@ -33,6 +38,50 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
     var viewingCrash by remember { mutableStateOf<java.io.File?>(null) }
 
     LaunchedEffect(Unit) { crashReports = CrashReporter.getCrashReports(context) }
+
+    // ── Diagnostics: one text with device info, app state and recent logs ────
+    val scope = rememberCoroutineScope()
+    var collecting by remember { mutableStateOf(false) }
+
+    /** What the app is doing right now. Read on the main thread, then handed to the collector. */
+    fun appStateSnapshot(): String = buildString {
+        val st = vm.engineStatus.value
+        appendLine("Engine:        running=${st.isRunning} rate=${st.sampleRate} Hz frames/burst=${st.framesPerBurst} latency~${st.latencyMs.toInt()} ms")
+        appendLine("Master bypass: ${vm.masterBypass.value}")
+        appendLine("Preset:        ${vm.selectedPreset.value?.name ?: "none"}")
+        appendLine("Shizuku:       ${vm.shizukuState.value}")
+        appendLine("Active tier:   ${vm.virtualMicTier.value} (${vm.virtualMicTier.value.displayName})")
+        VirtualMicTier.values().forEach { t ->
+            appendLine("  tier ${t.name}: ${vm.checkTierAvailability(t) ?: "available"}")
+        }
+        appendLine("Input device id:  ${vm.selectedInputDeviceId.value}")
+        appendLine("Output device id: ${vm.selectedOutputDeviceId.value}")
+        val slots = vm.pluginSlots.value
+        appendLine("Plugin chain (${slots.size}):")
+        if (slots.isEmpty()) appendLine("  (empty)")
+        slots.forEach { s ->
+            // nativeHandle 0 means the plugin did not load into the audio engine
+            appendLine("  #${s.position} ${s.descriptor.name} [${s.descriptor.format}] enabled=${s.enabled} " +
+                "loaded=${s.nativeHandle != 0L} path=${s.descriptor.path}")
+        }
+        appendLine("Discovered plugins: ${vm.discovered.value.size}")
+        vm.discovered.value.forEach { d -> appendLine("  ${d.name} [${d.format}] ${d.path}") }
+    }
+
+    fun collectLog(onReady: (String) -> Unit) {
+        if (collecting) return
+        collecting = true
+        val snapshot = try { appStateSnapshot() } catch (e: Throwable) { "(could not read app state: $e)" }
+        scope.launch {
+            val text = try {
+                withContext(Dispatchers.IO) { DiagnosticsLog.build(context, snapshot) }
+            } catch (e: Throwable) {
+                "Could not collect the log: $e"
+            }
+            collecting = false
+            onReady(text)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -205,6 +254,40 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
             SettingsSection("Plugins") {
                 SettingsActionRow("Manage Plugin Paths", Icons.Default.FolderOpen) { navController.navigate("plugin_paths") }
                 SettingsActionRow("Rescan Plugin Directories", Icons.Default.Refresh) { vm.rescan() }
+            }
+
+            // ── Diagnostics ───────────────────────────────────────────────────
+            SettingsSection("Diagnostics") {
+                Text(
+                    "Bundles your device model, what the app is doing and this app's recent log lines into one text file. " +
+                        "It contains no audio. Send it to whoever is helping you.",
+                    fontSize = 10.sp, color = StudioColors.TextMuted, lineHeight = 14.sp,
+                )
+                SettingsActionRow(
+                    if (collecting) "Collecting…" else "Share log",
+                    Icons.Default.Share,
+                ) {
+                    collectLog { text ->
+                        try {
+                            DiagnosticsLog.share(context, DiagnosticsLog.writeFile(context, text))
+                        } catch (e: Throwable) {
+                            Toast.makeText(context, "Could not share the log: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+                SettingsActionRow(
+                    if (collecting) "Collecting…" else "Copy log",
+                    Icons.Default.ContentCopy,
+                ) {
+                    collectLog { text ->
+                        try {
+                            DiagnosticsLog.copy(context, text)
+                            Toast.makeText(context, "Log copied. Paste it into your message.", Toast.LENGTH_LONG).show()
+                        } catch (e: Throwable) {
+                            Toast.makeText(context, "Could not copy the log: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
             }
 
             // ── About ─────────────────────────────────────────────────────────
