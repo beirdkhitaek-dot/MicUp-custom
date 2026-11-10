@@ -32,8 +32,10 @@ class PluginManager @Inject constructor(
         results += scanClap()
         results += scanVst3()
         results += scanApkPlugins()
-        _discovered.value = results
-        Log.i(TAG, "Scan complete: ${results.size} plugins found")
+        // The scan folders overlap, so the same file can be found twice: keep one entry per file.
+        val unique = results.distinctBy { it.format.toString() + "|" + it.path }
+        _discovered.value = unique
+        Log.i(TAG, "Scan complete: ${unique.size} plugins found")
         Log.i(TAG, "LV2 paths:  ${pathPrefs.allPaths(context, PluginFormat.LV2).map { it.absolutePath }}")
         Log.i(TAG, "CLAP paths: ${pathPrefs.allPaths(context, PluginFormat.CLAP).map { it.absolutePath }}")
         Log.i(TAG, "VST3 paths: ${pathPrefs.allPaths(context, PluginFormat.VST3).map { it.absolutePath }}")
