@@ -51,28 +51,29 @@ object SoftwareLoopback {
         monitorTrack!!.setVolume(if (monitorEnabled) 1f else 0f)
         if (android.os.Build.VERSION.SDK_INT >= 23) monitorTrack!!.preferredDevice = null
 
-        // Suppress physical mic playback path — processed path is the only output
-        try {
-            @Suppress("DEPRECATION")
-            audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
-            @Suppress("DEPRECATION")
-            audioManager?.isSpeakerphoneOn = false
-            // Mute mic playback (not recording) — stops raw voice leaking to output
-            audioManager?.isMicrophoneMute = false  // keep recording alive
-        } catch (_: Exception) {}
-
+        // Normal audio mode: call mode would route the monitor to the quiet earpiece and can
+        // make Discord treat the phone as being in a call.
         running = true
         queue.clear()
 
         // Worker thread drains queue → writes to AudioTrack (blocking OK here)
         workerThread = Thread({
             Log.i(TAG, "Worker thread started")
+            var peak = 0f; var written = 0L; var lastStat = 0L
             while (running) {
                 try {
                     val buf = queue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
                         ?: continue
                     if (monitorEnabled) {
                         monitorTrack?.write(buf, 0, buf.size, AudioTrack.WRITE_BLOCKING)
+                        var pk = 0f; for (v in buf) { val a = Math.abs(v); if (a > pk) pk = a }
+                        if (pk > peak) peak = pk
+                        written += buf.size
+                        val now = System.currentTimeMillis()
+                        if (now - lastStat > 3000) {
+                            Log.i(TAG, "Monitor playing: ${written} samples, peak ${"%.3f".format(peak)}, track state ${monitorTrack?.playState}")
+                            lastStat = now; peak = 0f
+                        }
                     }
                     // Recycle buffer back to pool — no GC
                     pool.offer(buf)
@@ -100,8 +101,6 @@ object SoftwareLoopback {
         monitorTrack = null
         abandonAudioFocus()
         try {
-            @Suppress("DEPRECATION") audioManager?.mode = AudioManager.MODE_NORMAL
-            @Suppress("DEPRECATION") audioManager?.isSpeakerphoneOn = false
         } catch (_: Exception) {}
         Log.i(TAG, "SoftwareLoopback stopped")
     }
@@ -204,10 +203,13 @@ object SoftwareLoopback {
                     it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET    ||
                     it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
                     it.type == AudioDeviceInfo.TYPE_BLE_HEADSET      ||
-                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-                } ?: outputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO    ||
+                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP   ||
+                    it.type == AudioDeviceInfo.TYPE_USB_HEADSET
+                }   // none plugged in: leave null = system default (loudspeaker), not the earpiece
             } else outputs.firstOrNull { it.id == selectedDeviceId }
-            dev?.let { monitorTrack?.preferredDevice = it }
+            monitorTrack?.preferredDevice = dev
+            Log.i(TAG, "Monitor output: ${dev?.productName ?: "system default"} (type ${dev?.type})")
         } catch (e: Exception) { Log.e(TAG, "applyOutputDevice: $e") }
     }
 
@@ -224,8 +226,8 @@ object SoftwareLoopback {
         if (Build.VERSION.SDK_INT >= 26) {
             focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
                 .setAudioAttributes(AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
                 .setOnAudioFocusChangeListener(listener)
                 .setWillPauseWhenDucked(false).build()
             am.requestAudioFocus(focusRequest!!)
@@ -248,8 +250,8 @@ object SoftwareLoopback {
         if (Build.VERSION.SDK_INT >= 26) {
             AudioTrack.Builder()
                 .setAudioAttributes(AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
                 .setAudioFormat(AudioFormat.Builder()
                     .setSampleRate(SAMPLE_RATE)
                     .setEncoding(FORMAT)   // PCM_FLOAT — no conversion ever
