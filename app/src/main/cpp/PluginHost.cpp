@@ -25,7 +25,11 @@ PluginHost::~PluginHost() {
     for (auto& p : pendingChain_) p->cleanup();
 }
 
-void PluginHost::process(float* buf, int32_t frames, int32_t /*sampleRate*/) {
+void PluginHost::process(float* buf, int32_t frames, int32_t sampleRate) {
+    if (sampleRate <= 0) sampleRate = 48000;
+    // Budget scales with the block length: 60% of the block duration, never below 2 ms.
+    const int64_t blockNs = (int64_t)frames * 1'000'000'000LL / sampleRate;
+    const int64_t budgetNs = std::max<int64_t>(kWatchdogNs, blockNs * 6 / 10);
     // Commit pending chain (lock-free check)
     if (chainDirty_.load(std::memory_order_acquire)) {
         // Swap atomically — the UI thread has already built pendingChain_
@@ -39,12 +43,22 @@ void PluginHost::process(float* buf, int32_t frames, int32_t /*sampleRate*/) {
         if (plugin->bypassed.load(std::memory_order_relaxed)) continue;
 
         int64_t t0 = nowNs();
-        bool ok = plugin->process(buf, frames, 48000);
+        bool ok = plugin->process(buf, frames, sampleRate);
         int64_t elapsed = nowNs() - t0;
 
-        if (!ok || elapsed > kWatchdogNs) {
+        if (elapsed > budgetNs) {
+            // Only bypass after several slow blocks in a row, so one scheduling hiccup is tolerated.
+            if (++plugin->strikes >= kMaxStrikes) {
+                plugin->bypassed.store(true, std::memory_order_relaxed);
+                LOGE("Plugin watchdog: %lld ns (budget %lld) x%d — auto-bypassed",
+                     (long long)elapsed, (long long)budgetNs, plugin->strikes);
+            }
+        } else {
+            plugin->strikes = 0;
+        }
+        if (!ok) {
             plugin->bypassed.store(true, std::memory_order_relaxed);
-            LOGE("Plugin watchdog: %lld ns — auto-bypassed", (long long)elapsed);
+            LOGE("Plugin process failed — auto-bypassed");
         }
     }
 }
@@ -53,6 +67,9 @@ jlong PluginHost::loadPlugin(const char* path, int32_t formatId, int32_t sampleR
     std::lock_guard<std::mutex> lock(uiMutex_);
 
     std::shared_ptr<PluginInstance> instance;
+
+    // Same file already in the chain: reuse it instead of loading a duplicate.
+    for (auto& p : pendingChain_) if (p->path == path) return p->handle;
 
     switch (formatId) {
         case 0: instance = ClapHost::load(path, sampleRate); break;

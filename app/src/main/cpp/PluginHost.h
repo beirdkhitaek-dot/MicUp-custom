@@ -18,6 +18,7 @@ struct PluginInstance {
     std::string   path;
     std::atomic<bool> enabled{true};
     std::atomic<bool> bypassed{false};  // auto-bypass on timeout
+    int strikes = 0;                    // consecutive over-budget blocks (audio thread only)
 
     // Subclass data pointers
     void* nativeHandle = nullptr;
@@ -48,7 +49,8 @@ public:
     void  reorderPlugin(jlong handle, int32_t newPos);
     std::shared_ptr<PluginInstance> findPlugin(jlong handle);
 
-    static constexpr int64_t kWatchdogNs = 2'000'000LL; // 2ms
+    static constexpr int64_t kWatchdogNs = 2'000'000LL; // minimum budget: 2ms
+    static constexpr int kMaxStrikes = 20;              // consecutive slow blocks before bypass
 
 private:
     // Swap chain safely from UI thread
