@@ -15,14 +15,22 @@ android {
         applicationId = "com.micplugin"
         minSdk = 26
         targetSdk = 34
-        // Version injected by CI from git tag (e.g. v1.2.3 → 1.2.3)
-        val tagName = System.getenv("RELEASE_TAG") ?: "1.0.0"
-        val cleanTag = tagName.removePrefix("v")
-        val parts = cleanTag.split(".").mapNotNull { it.toIntOrNull() }
-        versionCode = (parts.getOrElse(0){1} * 10000) +
-                      (parts.getOrElse(1){0} * 100) +
-                       parts.getOrElse(2){0}
-        versionName = cleanTag
+        // Version: a release tag (RELEASE_TAG=v1.2.3) wins; otherwise every CI build gets its own
+        // number from the run counter, e.g. 1.1.14-ab12cd3, so each build is told apart on the phone.
+        val tag = System.getenv("RELEASE_TAG")
+        val run = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+        val sha = (System.getenv("GITHUB_SHA") ?: "").take(7)
+        if (tag != null) {
+            val cleanTag = tag.removePrefix("v")
+            val parts = cleanTag.split(".").mapNotNull { it.toIntOrNull() }
+            versionCode = (parts.getOrElse(0){1} * 10000) +
+                          (parts.getOrElse(1){0} * 100) +
+                           parts.getOrElse(2){0}
+            versionName = cleanTag
+        } else {
+            versionCode = 20000 + (run ?: 0)   // always above the old 10000, rises every build
+            versionName = "1.1.${run ?: 0}" + if (sha.isNotEmpty()) "-$sha" else "-local"
+        }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

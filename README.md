@@ -134,3 +134,6 @@ MIT License — see [LICENSE](LICENSE)
 <div align="center">
 Made for Android · Built with Oboe, C++17, Jetpack Compose
 </div>
+
+### Versions
+Every GitHub build numbers itself (Settings > About > Version, e.g. `1.1.14-ab12cd3`), so you can tell which build is installed. Each new build installs over the old one and keeps your plugins and settings.
