@@ -32,10 +32,24 @@ object MicInjector {
 
     val isActive: Boolean get() = active
 
+    // The system log keeps only a short window, so this keeps its own history for the diagnostic log.
+    private val history = java.util.ArrayDeque<String>()
+    private fun log(line: String) {
+        Log.i(TAG, line)
+        synchronized(history) {
+            history.addLast(java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date()) + " " + line)
+            while (history.size > 150) history.removeFirst()
+        }
+    }
+    fun dump(): String = synchronized(history) {
+        if (history.isEmpty()) "(injector was never started in this app session)" else history.joinToString("\n")
+    }
+
     fun start(context: Context, shizuku: ShizukuManager, targetPackage: String) {
         if (active) return
         active = true
         _status.value = "Starting…"
+        log("start requested for $targetPackage")
         val apk = context.applicationInfo.sourceDir
         thread(name = "MicInjector-start") {
             try {
@@ -44,6 +58,7 @@ object MicInjector {
                     .map { it.trim() }
                     .firstOrNull { it.startsWith("package:$targetPackage ") }
                     ?.substringAfter("uid:")?.trim()?.toIntOrNull()
+                log("uid lookup: ${listing.trim().take(120)} -> $uid")
                 if (uid == null) { fail("$targetPackage is not installed (or Shizuku cannot see it)"); return@thread }
 
                 val token = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
@@ -52,6 +67,7 @@ object MicInjector {
                     "CLASSPATH=$apk exec app_process /system/bin --nice-name=micup_inject " +
                         "com.micplugin.shell.InjectServer $uid $PORT $token"
                 )
+                log("helper spawned: ${p != null}")
                 if (p == null) { fail("Could not start the Shizuku helper"); return@thread }
                 proc = p
 
@@ -60,7 +76,7 @@ object MicInjector {
                 thread(name = "MicInjector-out") {
                     try {
                         p.inputStream.bufferedReader().forEachLine { line ->
-                            Log.i(TAG, line)
+                            log(line)
                             if (line == "INJ READY") ready.countDown()
                             if (line.startsWith("INJ FATAL")) { failure = line.removePrefix("INJ "); ready.countDown() }
                         }
@@ -77,6 +93,7 @@ object MicInjector {
                 s.connect(InetSocketAddress("127.0.0.1", PORT), 3000)
                 s.getOutputStream().write(token.toByteArray())
                 sock = s
+                log("connected to helper")
                 _status.value = "Active — Discord should now hear MicUp's voice ($targetPackage)"
                 val out = DataOutputStream(s.getOutputStream().buffered(32768))
                 while (active) {
@@ -84,19 +101,20 @@ object MicInjector {
                     out.write(chunk); out.flush()
                 }
             } catch (e: Throwable) {
-                Log.e(TAG, "injector failed: $e")
+                log("injector failed: $e")
                 if (active) fail("$e")
             }
         }
     }
 
     private fun fail(msg: String) {
-        Log.e(TAG, "FAILED: $msg")
+        log("FAILED: $msg")
         stop()
         _status.value = "Failed: $msg"
     }
 
     fun stop() {
+        if (active) log("stopped")
         active = false
         queue.clear()
         try { sock?.close() } catch (_: Exception) {}

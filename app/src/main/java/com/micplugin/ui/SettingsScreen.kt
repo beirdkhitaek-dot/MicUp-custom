@@ -76,7 +76,7 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
             val text = try {
                 withContext(Dispatchers.IO) {
                     val probe = try { vm.shizukuProbe() } catch (e: Throwable) { "probe failed: $e" }
-                    DiagnosticsLog.build(context, snapshot + "\n=== Shizuku probe (runs as the shell user) ===\n" + probe)
+                    DiagnosticsLog.build(context, snapshot + "\n=== Discord injector log ===\n" + com.micplugin.service.MicInjector.dump() + "\n\n=== Shizuku probe (runs as the shell user) ===\n" + probe)
                 }
             } catch (e: Throwable) {
                 "Could not collect the log: $e"

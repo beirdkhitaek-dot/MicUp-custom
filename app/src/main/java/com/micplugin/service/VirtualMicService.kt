@@ -151,7 +151,8 @@ class VirtualMicService @Inject constructor(
     private fun detectAndSetBestTier() {
         _activeTier.value = when {
             isRooted()                       -> VirtualMicTier.ROOT_MAGISK
-            shizukuManager.isReady           -> VirtualMicTier.SHIZUKU_ADB
+            // Shizuku is NOT picked here: it only counts once the ALSA loopback card is verified
+            // (see activateShizukuRouting), otherwise the monitor loses its output.
             Build.VERSION.SDK_INT >= 34      -> VirtualMicTier.MEDIA_PROJECTION
             else                             -> VirtualMicTier.VOIP_STREAM
         }
@@ -162,8 +163,7 @@ class VirtualMicService @Inject constructor(
     fun onShizukuReady() {
         if (_activeTier.value == VirtualMicTier.VOIP_STREAM ||
             _activeTier.value == VirtualMicTier.MEDIA_PROJECTION) {
-            _activeTier.value = VirtualMicTier.SHIZUKU_ADB
-            activateShizukuRouting()
+            activateShizukuRouting()   // sets SHIZUKU_ADB only if the loopback really works
         }
     }
 
@@ -186,6 +186,8 @@ class VirtualMicService @Inject constructor(
             Log.w(TAG, "ALSA loopback not available on this device's kernel (missing snd-aloop?) " +
                     "— falling back to Software Loopback")
             _activeTier.value = VirtualMicTier.MEDIA_PROJECTION
+        } else {
+            _activeTier.value = VirtualMicTier.SHIZUKU_ADB
         }
         return working && routed
     }
