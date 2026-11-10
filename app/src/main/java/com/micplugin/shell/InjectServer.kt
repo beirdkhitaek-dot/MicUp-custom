@@ -97,6 +97,7 @@ object InjectServer {
                 if (String(tk) != token) { say("client rejected (bad token)"); client.close(); continue }
                 say("client connected")
                 var frames = 0L
+                var peak = 0
                 while (true) {
                     val n = input.readInt()
                     if (n <= 0 || n > 65536) throw java.io.IOException("bad length $n")
@@ -106,10 +107,14 @@ object InjectServer {
                     for (i in 0 until n) {
                         val v = ((raw[2 * i + 1].toInt() shl 8) or (raw[2 * i].toInt() and 0xFF)).toShort()
                         stereo[2 * i] = v; stereo[2 * i + 1] = v
+                        val av = Math.abs(v.toInt()); if (av > peak) peak = av
                     }
                     track.write(stereo, 0, stereo.size)
                     frames += n
-                    if (frames % (RATE * 5L) < n) say("injected $frames frames so far")
+                    if (frames % (RATE * 5L) < n) {
+                        say("injected $frames frames, peak ${"%.2f".format(peak / 32768.0)}, underruns ${track.underrunCount}, track state ${track.playState}")
+                        peak = 0
+                    }
                 }
             } catch (e: Exception) {
                 say("client gone: $e")

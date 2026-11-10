@@ -178,6 +178,8 @@ class ShizukuManager @Inject constructor() {
             "can load modules?"   to "grep CapEff /proc/self/status",
             "audio routing perm"  to "dumpsys package com.android.shell | grep -i -E 'MODIFY_AUDIO_ROUTING|CAPTURE_AUDIO_OUTPUT|CAPTURE_AUDIO_HOTWORD' | head -5",
             "audio policy mixes"  to "dumpsys media.audio_policy | grep -i -E 'dynamic|mix' | head -8",
+            "recording clients"   to "dumpsys audio | grep -i -A4 -E 'recording|rec ?id' | head -40",
+            "policy inputs"       to "dumpsys media.audio_policy | grep -i -E 'Remote Submix|Input [0-9]|Client|uid|Source' | head -40",
         )
         return buildString {
             for ((label, cmd) in checks) {
