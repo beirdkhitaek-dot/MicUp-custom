@@ -263,6 +263,7 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
             SettingsSection("Send voice to Discord (experimental)") {
                 val injStatus by com.micplugin.service.MicInjector.status.collectAsState()
                 var injOn by remember { mutableStateOf(com.micplugin.service.MicInjector.isActive) }
+                var injApp by remember { mutableStateOf("discord") }
                 Text(
                     "Uses Shizuku to redirect the microphone of the chosen app to MicUp's processed voice. " +
                         "Start the engine first, then switch this on, then join the call.",
@@ -274,10 +275,15 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
                         checked = injOn || injStatus.startsWith("Active"),
                         onCheckedChange = { on ->
                             injOn = on
-                            if (on) vm.startInjector(context, "com.discord") else vm.stopInjector()
+                            if (on) vm.startInjector(context, injApp.trim().ifEmpty { "discord" }) else vm.stopInjector()
                         },
                     )
                 }
+                OutlinedTextField(
+                    value = injApp, onValueChange = { injApp = it }, singleLine = true,
+                    label = { Text("App name to search for (part of its package name)") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 SettingsInfoRow("Status", injStatus)
             }
 

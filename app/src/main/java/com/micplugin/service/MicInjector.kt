@@ -53,13 +53,10 @@ object MicInjector {
         val apk = context.applicationInfo.sourceDir
         thread(name = "MicInjector-start") {
             try {
-                val listing = shizuku.exec("cmd package list packages -U $targetPackage") ?: ""
-                val uid = listing.lineSequence()
-                    .map { it.trim() }
-                    .firstOrNull { it.startsWith("package:$targetPackage ") }
-                    ?.substringAfter("uid:")?.trim()?.toIntOrNull()
-                log("uid lookup: ${listing.trim().take(120)} -> $uid")
-                if (uid == null) { fail("$targetPackage is not installed (or Shizuku cannot see it)"); return@thread }
+                val found = findTarget(shizuku, targetPackage)
+                if (found == null) { fail("no installed app matching \"$targetPackage\" was found (see the injector log)"); return@thread }
+                val (pkgName, uid) = found
+                log("target app: $pkgName uid=$uid")
 
                 val token = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
                 shizuku.exec("pkill -f micup_inject")
@@ -94,7 +91,7 @@ object MicInjector {
                 s.getOutputStream().write(token.toByteArray())
                 sock = s
                 log("connected to helper")
-                _status.value = "Active — Discord should now hear MicUp's voice ($targetPackage)"
+                _status.value = "Active — $pkgName should now hear MicUp's voice"
                 val out = DataOutputStream(s.getOutputStream().buffered(32768))
                 while (active) {
                     val chunk = queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
@@ -105,6 +102,21 @@ object MicInjector {
                 if (active) fail("$e")
             }
         }
+    }
+
+    /** Looks for installed apps whose package name contains [filter], in the main user and the Dual Apps user (999). */
+    private fun findTarget(shizuku: ShizukuManager, filter: String): Pair<String, Int>? {
+        for (user in listOf("0", "999")) {
+            val out = shizuku.exec("cmd package list packages -U --user $user $filter") ?: ""
+            log("packages matching \"$filter\" (user $user): ${out.trim().replace("\n", " | ").take(400).ifEmpty { "none" }}")
+            val hits = out.lineSequence().map { it.trim() }.filter { it.startsWith("package:") }.mapNotNull { line ->
+                val name = line.removePrefix("package:").substringBefore(" ")
+                val uid = line.substringAfter("uid:", "").trim().toIntOrNull()
+                if (uid != null) name to uid else null
+            }.toList()
+            if (hits.isNotEmpty()) return hits.firstOrNull { it.first == "com.discord" } ?: hits.first()
+        }
+        return null
     }
 
     private fun fail(msg: String) {
