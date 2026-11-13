@@ -92,27 +92,70 @@ object InjectServer {
         Thread({
             try { serve(track, port, token) } catch (t: Throwable) { say("FATAL server: $t"); System.exit(4) }
         }, "inject-socket").start()
-        Thread({ snapshots() }, "inject-snap").start()
+        Thread({ watchRecorders() }, "inject-watch").apply { isDaemon = true }.start()
+        if (byInput) Thread({ selfTest() }, "inject-selftest").start()
         say("READY")
         Looper.loop()
     }
 
-    /** While the call is going on, record what Android thinks is recording, so the app log can show it. */
-    private fun snapshots() {
-        val cmds = listOf(
-            "dumpsys audio | grep -a -E 'rec (update|start|stop)' | tail -8",
-            "dumpsys media.audio_flinger | grep -a -i -E 'Input thread|Sample rate|Channel count|HAL format|Active Tracks|Client|Source|uid' | head -40",
-        )
-        for (delay in longArrayOf(10000, 20000, 25000)) {
-            try { Thread.sleep(delay) } catch (_: InterruptedException) { return }
-            say("--- snapshot ---")
-            for (c in cmds) {
-                try {
-                    val p = ProcessBuilder("sh", "-c", c).redirectErrorStream(true).start()
-                    p.inputStream.bufferedReader().forEachLine { say("  " + it.trim().take(160)) }
-                } catch (e: Exception) { say("  snapshot failed: $e") }
+    private fun sh(cmd: String): List<String> = try {
+        val p = ProcessBuilder("sh", "-c", cmd).redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().readLines()
+        p.waitFor(); out
+    } catch (e: Exception) { listOf("failed: $e") }
+
+    /** Logs every NEW recording start by an app other than MicUp, so we see exactly when Discord starts its mic. */
+    private fun watchRecorders() {
+        val seen = HashSet<String>()
+        var flingerDumps = 0
+        while (true) {
+            for (l in sh("dumpsys audio | grep -a -E 'rec (update|start|stop)' | grep -a -v HOTWORD | grep -a -v 'pack:com.micplugin' | tail -6")) {
+                val t = l.trim()
+                if (t.isNotEmpty() && seen.add(t)) {
+                    say("REC EVENT $t")
+                    if (flingerDumps < 3 && t.contains(" rec update") || t.contains(" rec start")) {
+                        flingerDumps++
+                        say("  input threads:")
+                        sh("dumpsys media.audio_flinger > /data/local/tmp/micup_af.txt 2>&1; grep -a -i -A14 'Input thread' /data/local/tmp/micup_af.txt | grep -a -i -E 'Input thread|Sample rate|Channel count|HAL format|Frame count|source|Active|uid' | head -30")
+                            .forEach { say("    " + it.trim().take(150)) }
+                    }
+                }
             }
+            try { Thread.sleep(3000) } catch (_: InterruptedException) { return }
         }
+    }
+
+    /**
+     * Records as the shell user with the same source the rule redirects (VoiceCommunication). If the
+     * redirect works, this recording contains the audio MicUp injects (your processed voice).
+     */
+    private fun selfTest() {
+        try {
+            Thread.sleep(6000)
+            val rate = 48000
+            val minBuf = android.media.AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            val rec = android.media.AudioRecord(7, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, 8192) * 2)
+            say("SELFTEST recorder state=${rec.state} (1 = ready)")
+            if (rec.state != android.media.AudioRecord.STATE_INITIALIZED) { say("SELFTEST failed: recorder not initialized"); return }
+            rec.startRecording()
+            say("SELFTEST recording started (recordingState=${rec.recordingState})")
+            val buf = ShortArray(4800)
+            var peak = 0; var n = 0
+            var last = System.currentTimeMillis()
+            val end = last + 45000
+            while (System.currentTimeMillis() < end) {
+                val r = rec.read(buf, 0, buf.size)
+                if (r < 0) { say("SELFTEST read error $r"); break }
+                for (i in 0 until r) { val a = Math.abs(buf[i].toInt()); if (a > peak) peak = a }
+                n += r
+                if (System.currentTimeMillis() - last >= 2000) {
+                    say("SELFTEST heard $n samples, peak ${"%.2f".format(peak / 32768.0)}")
+                    peak = 0; n = 0; last = System.currentTimeMillis()
+                }
+            }
+            rec.stop(); rec.release()
+            say("SELFTEST finished")
+        } catch (t: Throwable) { say("SELFTEST error: $t") }
     }
 
     /** Accepts one MicUp client at a time: token line, then [int length][int16 mono samples]... */

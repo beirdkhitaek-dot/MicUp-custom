@@ -75,6 +75,7 @@ object MicInjector {
                         p.inputStream.bufferedReader().forEachLine { line ->
                             log(line)
                             if (line == "INJ READY") ready.countDown()
+                            if (line.startsWith("INJ SELFTEST heard")) _status.value = "Active — self-test: " + line.removePrefix("INJ SELFTEST ")
                             if (line.startsWith("INJ FATAL")) { failure = line.removePrefix("INJ "); ready.countDown() }
                         }
                     } catch (_: Exception) {}
@@ -91,7 +92,7 @@ object MicInjector {
                 s.getOutputStream().write(token.toByteArray())
                 sock = s
                 log("connected to helper")
-                _status.value = "Active — $pkgName should now hear MicUp's voice"
+                _status.value = "Active for $pkgName — now JOIN or REJOIN the call (or mute and unmute your mic in Discord)"
                 val out = DataOutputStream(s.getOutputStream().buffered(32768))
                 while (active) {
                     val chunk = queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
