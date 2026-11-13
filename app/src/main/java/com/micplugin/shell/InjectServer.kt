@@ -18,6 +18,8 @@ import java.net.ServerSocket
  */
 object InjectServer {
     private const val RATE = 48000
+    @Volatile private var appContext: Context? = null
+    @Volatile private var clientAlive = false
 
     private fun say(s: String) { println("INJ $s"); System.out.flush() }
 
@@ -38,6 +40,7 @@ object InjectServer {
         val atc = Class.forName("android.app.ActivityThread")
         val at = atc.getMethod("systemMain").invoke(null)
         val ctx = atc.getMethod("getSystemContext").invoke(at) as Context
+        appContext = ctx
         say("context ok, running as uid ${android.os.Process.myUid()}, target uid $targetUid")
 
         val intType = Int::class.javaPrimitiveType!!
@@ -158,6 +161,74 @@ object InjectServer {
         } catch (t: Throwable) { say("SELFTEST error: $t") }
     }
 
+    /** True/false if Android currently silences this recording, null if unknown. */
+    private fun isSilenced(rec: android.media.AudioRecord): Boolean? = try {
+        val am = appContext?.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        am.activeRecordingConfigurations.firstOrNull { it.clientAudioSessionId == rec.audioSessionId }?.isClientSilenced
+    } catch (_: Throwable) { null }
+
+    /**
+     * Records the real microphone as the shell user (Android silences MicUp's own recording while
+     * another app is in a call) and sends it to MicUp as [int count][int16 LE samples]. Tries several
+     * sources; moves on to the next one if Android reports the recording as silenced.
+     */
+    private fun micLoop(out: java.io.OutputStream) {
+        val sources = intArrayOf(6, 1, 9, 5)   // VOICE_RECOGNITION, MIC, UNPROCESSED, CAMCORDER
+        var si = 0
+        var failures = 0
+        val minBuf = android.media.AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val dout = java.io.DataOutputStream(java.io.BufferedOutputStream(out, 16384))
+        while (clientAlive) {
+            val src = sources[si % sources.size]
+            var rec: android.media.AudioRecord? = null
+            try {
+                rec = android.media.AudioRecord(src, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, 4096) * 4)
+                if (rec.state != android.media.AudioRecord.STATE_INITIALIZED) {
+                    say("MIC src=$src could not start"); failures++
+                    if (failures >= sources.size) say("MIC FAILED all sources could not start")
+                    si++; Thread.sleep(500); continue
+                }
+                rec.startRecording()
+                failures = 0
+                say("MIC OK src=$src recordingState=${rec.recordingState}")
+                val buf = ShortArray(1920)
+                val bytes = ByteArray(buf.size * 2)
+                var peak = 0
+                var last = System.currentTimeMillis()
+                var silencedChecks = 0
+                while (clientAlive) {
+                    val r = rec.read(buf, 0, buf.size)
+                    if (r <= 0) { say("MIC read returned $r"); break }
+                    var k = 0
+                    for (i in 0 until r) {
+                        val v = buf[i].toInt()
+                        bytes[k++] = (v and 0xFF).toByte(); bytes[k++] = (v shr 8).toByte()
+                        val a = Math.abs(v); if (a > peak) peak = a
+                    }
+                    dout.writeInt(r); dout.write(bytes, 0, r * 2); dout.flush()
+                    val now = System.currentTimeMillis()
+                    if (now - last >= 2000) {
+                        val sil = isSilenced(rec)
+                        say("MIC src=$src peak ${"%.2f".format(peak / 32768.0)} silenced=$sil")
+                        peak = 0; last = now
+                        silencedChecks = if (sil == true) silencedChecks + 1 else 0
+                        if (silencedChecks >= 3) { say("MIC src=$src is silenced by Android, trying the next source"); break }
+                    }
+                }
+            } catch (e: java.io.IOException) {
+                say("MIC stream closed: $e"); clientAlive = false
+            } catch (t: Throwable) {
+                say("MIC src=$src error: $t"); failures++
+                if (failures >= sources.size) say("MIC FAILED $t")
+                try { Thread.sleep(500) } catch (_: InterruptedException) {}
+            } finally {
+                try { rec?.stop() } catch (_: Throwable) {}
+                try { rec?.release() } catch (_: Throwable) {}
+            }
+            si++
+        }
+    }
+
     /** Accepts one MicUp client at a time: token line, then [int length][int16 mono samples]... */
     private fun serve(track: AudioTrack, port: Int, token: String) {
         val server = ServerSocket(port, 1, InetAddress.getByName("127.0.0.1"))
@@ -169,6 +240,8 @@ object InjectServer {
                 input.readFully(tk)
                 if (String(tk) != token) { say("client rejected (bad token)"); client.close(); continue }
                 say("client connected")
+                clientAlive = true
+                Thread({ micLoop(client.getOutputStream()) }, "inject-mic").start()
                 var frames = 0L
                 var peak = 0
                 while (true) {
@@ -191,6 +264,7 @@ object InjectServer {
                 }
             } catch (e: Exception) {
                 say("client gone: $e")
+                clientAlive = false
             } finally {
                 try { client.close() } catch (_: Exception) {}
             }
