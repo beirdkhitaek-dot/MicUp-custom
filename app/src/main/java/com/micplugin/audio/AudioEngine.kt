@@ -70,6 +70,8 @@ class AudioEngine @Inject constructor(
     fun setMasterBypass(bypass: Boolean) = oboe.setParam(99, 0, if (bypass) 1f else 0f)
     fun setInjectionMode(enabled: Boolean) = oboe.setInjectionMode(enabled)
     fun setCapturePreset(preset: Int) = oboe.setCapturePreset(preset)
+    fun setExternalInput(on: Boolean) = oboe.setExternalInput(on)
+    fun pushInput(data: FloatArray, n: Int) = oboe.pushInput(data, n)
     fun setInputDevice(deviceId: Int) = oboe.setInputDevice(deviceId)
 
     // ── Built-in effect param setters (all RT-safe via atomic stores) ──────────

@@ -25,6 +25,7 @@ object MicInjector {
     private val _status = MutableStateFlow("Off")
     val status: StateFlow<String> = _status
 
+    @Volatile var engine: com.micplugin.audio.AudioEngine? = null
     @Volatile private var active = false
     @Volatile private var proc: Process? = null
     @Volatile private var sock: Socket? = null
@@ -75,6 +76,8 @@ object MicInjector {
                         p.inputStream.bufferedReader().forEachLine { line ->
                             log(line)
                             if (line == "INJ READY") ready.countDown()
+                            if (line.startsWith("INJ MIC OK")) engine?.setExternalInput(true)
+                            if (line.startsWith("INJ MIC FAILED")) engine?.setExternalInput(false)
                             if (line.startsWith("INJ SELFTEST heard")) _status.value = "Active — self-test: " + line.removePrefix("INJ SELFTEST ")
                             if (line.startsWith("INJ FATAL")) { failure = line.removePrefix("INJ "); ready.countDown() }
                         }
@@ -93,6 +96,22 @@ object MicInjector {
                 sock = s
                 log("connected to helper")
                 _status.value = "Active for $pkgName — now JOIN or REJOIN the call (or mute and unmute your mic in Discord)"
+                // Microphone audio recorded by the helper comes back on the same socket.
+                thread(name = "MicInjector-mic") {
+                    try {
+                        val din = java.io.DataInputStream(s.getInputStream().buffered(32768))
+                        var fbuf = FloatArray(4096)
+                        while (active) {
+                            val n = din.readInt()
+                            if (n <= 0 || n > 4096) break
+                            val raw = ByteArray(n * 2)
+                            din.readFully(raw)
+                            val bb = ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                            for (i in 0 until n) fbuf[i] = bb.short / 32768f
+                            engine?.pushInput(fbuf, n)
+                        }
+                    } catch (_: Exception) {}
+                }
                 val out = DataOutputStream(s.getOutputStream().buffered(32768))
                 while (active) {
                     val chunk = queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
@@ -130,6 +149,7 @@ object MicInjector {
         if (active) log("stopped")
         active = false
         queue.clear()
+        try { engine?.setExternalInput(false) } catch (_: Throwable) {}
         try { sock?.close() } catch (_: Exception) {}
         sock = null
         try { proc?.destroy() } catch (_: Exception) {}

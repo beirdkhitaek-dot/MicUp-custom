@@ -139,6 +139,7 @@ class AudioProcessingService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        MicInjector.engine = audioEngine
         audioEngine.setMonitorCallback { buf: FloatArray, size: Int ->
             SoftwareLoopback.writeProcessed(buf, size)
             MicInjector.offer(buf, size)

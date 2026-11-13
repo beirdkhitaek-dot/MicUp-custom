@@ -180,6 +180,14 @@ public:
     }
     int32_t getInputDeviceId() const { return inputDeviceId_.load(std::memory_order_relaxed); }
 
+    // External input: audio captured elsewhere (the Shizuku helper) and pushed in from Kotlin.
+    // Used because Android silences this app's own microphone while another app is in a call.
+    void setExternalInput(bool on) {
+        if (on) extRing_.reset();
+        externalInput_.store(on, std::memory_order_release);
+    }
+    void pushExternalInput(const float* d, size_t n) { extRing_.write(d, n); }
+
     // oboe callbacks
     oboe::DataCallbackResult onAudioReady(
         oboe::AudioStream* stream, void* data, int32_t frames) override;
@@ -211,6 +219,8 @@ private:
     // Preferred input device id — see setInputDeviceId() above. oboe::kUnspecified means
     // "let the system pick", which preserves the original default behavior.
     std::atomic<int32_t> inputDeviceId_{oboe::kUnspecified};
+    std::atomic<bool> externalInput_{false};
+    SPSCRingBuffer<65536> extRing_;
 
     // Restart loop protection
     static constexpr int kMaxRestarts = 5;

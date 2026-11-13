@@ -229,11 +229,18 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         return oboe::DataCallbackResult::Continue;
     }
 
-    // Read from input stream (non-blocking, 0ns timeout)
-    oboe::ResultWithValue<int32_t> readResult =
-        inputStream_->read(out, numFrames, 0);
-
-    int32_t framesRead = (readResult) ? readResult.value() : 0;
+    int32_t framesRead = 0;
+    if (externalInput_.load(std::memory_order_acquire)) {
+        // Audio from the helper: use it only in whole blocks so it never glitches mid-block.
+        if (extRing_.available_read() >= (size_t)numFrames && extRing_.read(out, numFrames)) {
+            framesRead = numFrames;
+        }
+    } else {
+        // Read from input stream (non-blocking, 0ns timeout)
+        oboe::ResultWithValue<int32_t> readResult =
+            inputStream_->read(out, numFrames, 0);
+        framesRead = (readResult) ? readResult.value() : 0;
+    }
 
     if (framesRead < numFrames) {
         // Zero-fill remaining frames to avoid glitches
@@ -658,4 +665,20 @@ Java_com_micplugin_audio_OboeEngine_nativeGetInputSessionId(
 extern "C" JNIEXPORT void JNICALL
 Java_com_micplugin_audio_OboeEngine_nativeSetCapturePreset(JNIEnv*, jobject, jint preset) {
     g_capturePreset.store(preset == 1 ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_micplugin_audio_OboeEngine_nativeSetExternalInput(JNIEnv*, jobject, jlong handle, jboolean on) {
+    auto* engine = reinterpret_cast<micplugin::AudioEngine*>(handle);
+    if (engine) engine->setExternalInput(on == JNI_TRUE);
+    LOGI("External input (helper mic): %s", on ? "ON" : "OFF");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_micplugin_audio_OboeEngine_nativePushInput(JNIEnv* env, jobject, jlong handle, jfloatArray data, jint n) {
+    auto* engine = reinterpret_cast<micplugin::AudioEngine*>(handle);
+    if (!engine || n <= 0 || n > 8192) return;
+    float tmp[8192];
+    env->GetFloatArrayRegion(data, 0, n, tmp);
+    engine->pushExternalInput(tmp, (size_t)n);
 }
