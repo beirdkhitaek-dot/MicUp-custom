@@ -126,6 +126,10 @@ void AudioEngine::stop() {
     closeStreams();
 }
 
+// 0 = VoiceCommunication (default), 1 = VoicePerformance. Used so MicUp's own mic capture does not
+// match the Discord-injection rule (which redirects VoiceCommunication recordings).
+static std::atomic<int> g_capturePreset{0};
+
 bool AudioEngine::openStreams() {
     oboe::AudioStreamBuilder builder;
 
@@ -136,7 +140,8 @@ bool AudioEngine::openStreams() {
     auto result = builder
         .setDirection(oboe::Direction::Input)
         ->setDeviceId(preferredInputId)
-        ->setInputPreset(oboe::InputPreset::VoiceCommunication)
+        ->setInputPreset(g_capturePreset.load() == 1 ? oboe::InputPreset::VoicePerformance
+                                                      : oboe::InputPreset::VoiceCommunication)
         ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
         ->setSharingMode(oboe::SharingMode::Exclusive)
         ->setFormat(oboe::AudioFormat::Float)
@@ -649,3 +654,8 @@ Java_com_micplugin_audio_OboeEngine_nativeGetInputSessionId(
 
 
 } // extern "C"
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_micplugin_audio_OboeEngine_nativeSetCapturePreset(JNIEnv*, jobject, jint preset) {
+    g_capturePreset.store(preset == 1 ? 1 : 0);
+}

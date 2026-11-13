@@ -276,7 +276,10 @@ class AudioViewModel @Inject constructor(
 
     fun requestShizukuPermission() { shizukuManager.requestPermission() }
     fun shizukuProbe(): String = shizukuManager.probe()
-    fun startInjector(context: android.content.Context, pkg: String) = com.micplugin.service.MicInjector.start(context, shizukuManager, pkg)
+    fun startInjector(context: android.content.Context, pkg: String, byInput: Boolean) {
+        audioEngine.setCapturePreset(if (byInput) 1 else 0)
+        com.micplugin.service.MicInjector.start(context, shizukuManager, pkg, byInput)
+    }
     fun stopInjector() = com.micplugin.service.MicInjector.stop()
 
     /** Returns null if available, or a reason string if not. */

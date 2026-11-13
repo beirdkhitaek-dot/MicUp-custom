@@ -93,6 +93,9 @@ class OboeEngine @Inject constructor() {
     private external fun nativeGetPluginParams(handle: Long, pluginHandle: Long): String
     private external fun nativeSetMonitorCallback(handle: Long, callback: Any?)
     private external fun nativeSetInjectionMode(handle: Long, enabled: Boolean)
+    private external fun nativeSetCapturePreset(preset: Int)
+    /** 1 = capture with VoicePerformance (used by 'redirect by input type'), 0 = VoiceCommunication. Applies at next engine start. */
+    fun setCapturePreset(preset: Int) = nativeSetCapturePreset(preset)
     private external fun nativeSetInputDevice(handle: Long, deviceId: Int)
     private external fun nativeGetSampleRate(handle: Long): Int
     private external fun nativeGetInputSessionId(handle: Long): Int

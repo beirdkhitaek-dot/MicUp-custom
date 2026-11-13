@@ -24,7 +24,7 @@ object InjectServer {
     @JvmStatic
     fun main(args: Array<String>) {
         try {
-            run(args[0].toInt(), args[1].toInt(), args[2])
+            run(args[0].toInt(), args[1].toInt(), args[2], args.getOrElse(3) { "uid" } == "input")
         } catch (t: Throwable) {
             say("FATAL $t")
             var c = t.cause
@@ -33,7 +33,7 @@ object InjectServer {
         }
     }
 
-    private fun run(targetUid: Int, port: Int, token: String) {
+    private fun run(targetUid: Int, port: Int, token: String, byInput: Boolean) {
         Looper.prepareMainLooper()
         val atc = Class.forName("android.app.ActivityThread")
         val at = atc.getMethod("systemMain").invoke(null)
@@ -50,8 +50,19 @@ object InjectServer {
 
         val rb = ruleBC.getConstructor().newInstance()
         ruleBC.getMethod("setTargetMixRole", intType).invoke(rb, ruleC.getField("MIX_ROLE_INJECTOR").getInt(null))
-        ruleBC.getMethod("addMixRule", intType, Any::class.java)
-            .invoke(rb, ruleC.getField("RULE_MATCH_UID").getInt(null), Integer.valueOf(targetUid))
+        if (byInput) {
+            // Redirect every recording that uses the VoiceCommunication source (what call apps use).
+            val ab = android.media.AudioAttributes.Builder()
+            android.media.AudioAttributes.Builder::class.java
+                .getMethod("setInternalCapturePreset", intType).invoke(ab, 7)
+            ruleBC.getMethod("addMixRule", intType, Any::class.java)
+                .invoke(rb, ruleC.getField("RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET").getInt(null), ab.build())
+            say("rule: capture preset VOICE_COMMUNICATION")
+        } else {
+            ruleBC.getMethod("addMixRule", intType, Any::class.java)
+                .invoke(rb, ruleC.getField("RULE_MATCH_UID").getInt(null), Integer.valueOf(targetUid))
+            say("rule: uid $targetUid")
+        }
         val rule = ruleBC.getMethod("build").invoke(rb)
         say("mixing rule built")
 
@@ -81,8 +92,27 @@ object InjectServer {
         Thread({
             try { serve(track, port, token) } catch (t: Throwable) { say("FATAL server: $t"); System.exit(4) }
         }, "inject-socket").start()
+        Thread({ snapshots() }, "inject-snap").start()
         say("READY")
         Looper.loop()
+    }
+
+    /** While the call is going on, record what Android thinks is recording, so the app log can show it. */
+    private fun snapshots() {
+        val cmds = listOf(
+            "dumpsys audio | grep -a -E 'rec (update|start|stop)' | tail -8",
+            "dumpsys media.audio_flinger | grep -a -i -E 'Input thread|Sample rate|Channel count|HAL format|Active Tracks|Client|Source|uid' | head -40",
+        )
+        for (delay in longArrayOf(10000, 20000, 25000)) {
+            try { Thread.sleep(delay) } catch (_: InterruptedException) { return }
+            say("--- snapshot ---")
+            for (c in cmds) {
+                try {
+                    val p = ProcessBuilder("sh", "-c", c).redirectErrorStream(true).start()
+                    p.inputStream.bufferedReader().forEachLine { say("  " + it.trim().take(160)) }
+                } catch (e: Exception) { say("  snapshot failed: $e") }
+            }
+        }
     }
 
     /** Accepts one MicUp client at a time: token line, then [int length][int16 mono samples]... */

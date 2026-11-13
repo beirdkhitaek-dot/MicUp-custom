@@ -264,6 +264,7 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
                 val injStatus by com.micplugin.service.MicInjector.status.collectAsState()
                 var injOn by remember { mutableStateOf(com.micplugin.service.MicInjector.isActive) }
                 var injApp by remember { mutableStateOf("discord") }
+                var injByInput by remember { mutableStateOf(false) }
                 Text(
                     "Uses Shizuku to redirect the microphone of the chosen app to MicUp's processed voice. " +
                         "Start the engine first, then switch this on, then join the call.",
@@ -275,7 +276,7 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
                         checked = injOn || injStatus.startsWith("Active"),
                         onCheckedChange = { on ->
                             injOn = on
-                            if (on) vm.startInjector(context, injApp.trim().ifEmpty { "discord" }) else vm.stopInjector()
+                            if (on) vm.startInjector(context, injApp.trim().ifEmpty { "discord" }, injByInput) else vm.stopInjector()
                         },
                     )
                 }
@@ -284,6 +285,15 @@ fun SettingsScreen(navController: NavController, vm: AudioViewModel = hiltViewMo
                     label = { Text("App name to search for (part of its package name)") },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Alternative: redirect by input type (every app that uses the call microphone). " +
+                            "Switch this on BEFORE starting the engine, and restart the engine after changing it.",
+                        color = StudioColors.TextMuted, style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(checked = injByInput, onCheckedChange = { injByInput = it })
+                }
                 SettingsInfoRow("Status", injStatus)
             }
 

@@ -38,22 +38,22 @@ object MicInjector {
         Log.i(TAG, line)
         synchronized(history) {
             history.addLast(java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date()) + " " + line)
-            while (history.size > 150) history.removeFirst()
+            while (history.size > 500) history.removeFirst()
         }
     }
     fun dump(): String = synchronized(history) {
         if (history.isEmpty()) "(injector was never started in this app session)" else history.joinToString("\n")
     }
 
-    fun start(context: Context, shizuku: ShizukuManager, targetPackage: String) {
+    fun start(context: Context, shizuku: ShizukuManager, targetPackage: String, byInput: Boolean = false) {
         if (active) return
         active = true
         _status.value = "Starting…"
-        log("start requested for $targetPackage")
+        log("start requested for $targetPackage, mode=${if (byInput) "by input type (all VoiceCommunication recordings)" else "by app"}")
         val apk = context.applicationInfo.sourceDir
         thread(name = "MicInjector-start") {
             try {
-                val found = findTarget(shizuku, targetPackage)
+                val found = if (byInput) ("all call apps" to 0) else findTarget(shizuku, targetPackage)
                 if (found == null) { fail("no installed app matching \"$targetPackage\" was found (see the injector log)"); return@thread }
                 val (pkgName, uid) = found
                 log("target app: $pkgName uid=$uid")
@@ -62,7 +62,7 @@ object MicInjector {
                 shizuku.exec("pkill -f micup_inject")
                 val p = shizuku.spawn(
                     "CLASSPATH=$apk exec app_process /system/bin --nice-name=micup_inject " +
-                        "com.micplugin.shell.InjectServer $uid $PORT $token"
+                        "com.micplugin.shell.InjectServer $uid $PORT $token ${if (byInput) "input" else "uid"}"
                 )
                 log("helper spawned: ${p != null}")
                 if (p == null) { fail("Could not start the Shizuku helper"); return@thread }
